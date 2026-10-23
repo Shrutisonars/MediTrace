@@ -133,10 +133,11 @@ test.describe('MediTrace AI - Clinical SOC Main User Journey', () => {
     await fileInput.setInputFiles(testFilePath);
 
     // Verify SHA-256 was calculated and verified client-side
-    await expect(page.locator('text=VERIFIED')).toBeVisible();
+    const modal = page.locator('div[role="dialog"]');
+    await expect(modal.getByText('VERIFIED', { exact: true })).toBeVisible();
 
     // Submit upload
-    await page.click('button:has-text("Upload & Seal Evidence")');
+    await modal.locator('button:has-text("Upload & Seal Evidence")').click();
 
     // Modal should close on completion
     await expect(page.locator('#upload-modal-title')).not.toBeVisible({ timeout: 10000 });
