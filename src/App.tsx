@@ -66,6 +66,7 @@ export function App() {
       const data = await api.fetchAlerts(filters);
       setAlerts(data);
       setBackendConnected(true);
+      setErrorMessage(null);
 
       // Default select the first alert if none selected
       if (!selectedAlert && data.length > 0) {
@@ -102,10 +103,21 @@ export function App() {
     }
   }, [selectedEvidenceType]);
 
-  // Initial load
+  // Initial load and health heartbeat
   useEffect(() => {
     loadMetrics();
     loadAlerts();
+
+    const interval = setInterval(async () => {
+      try {
+        await api.checkHealth();
+        setBackendConnected(true);
+      } catch {
+        setBackendConnected(false);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
   }, [loadMetrics, loadAlerts]);
 
   // Update incident and timeline when selectedAlert changes

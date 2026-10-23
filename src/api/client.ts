@@ -10,17 +10,34 @@ import {
   EvidenceType
 } from './types';
 
-// API base: default to relative /api/v1 (routed via Vite proxy or direct FastAPI server)
-const API_BASE = import.meta.env.VITE_API_URL || '/api/v1';
+// API base: default to relative /api/v1 (routed via Vite proxy)
+const API_BASE = (import.meta as any).env?.VITE_API_URL || '/api/v1';
+const DIRECT_BACKEND = 'http://127.0.0.1:8000/api/v1';
+
+async function fetchWithFallback(endpointPath: string, options?: RequestInit): Promise<Response> {
+  const primaryUrl = `${API_BASE}${endpointPath}`;
+  try {
+    const res = await fetch(primaryUrl, options);
+    // If Vite proxy returned 502/504 Bad Gateway, fallback directly to port 8000
+    if (res.status === 502 || res.status === 504) {
+      return await fetch(`${DIRECT_BACKEND}${endpointPath}`, options);
+    }
+    return res;
+  } catch {
+    // Network failure on proxy - fallback directly to FastAPI port 8000
+    return await fetch(`${DIRECT_BACKEND}${endpointPath}`, options);
+  }
+}
 
 async function handleResponse<T>(res: Response, endpoint: string): Promise<T> {
   if (!res.ok) {
-    let errorDetail = '';
+    const rawText = await res.text();
+    let errorDetail = rawText;
     try {
-      const errJson = await res.json();
+      const errJson = JSON.parse(rawText);
       errorDetail = errJson.detail || JSON.stringify(errJson);
     } catch {
-      errorDetail = await res.text();
+      // Use rawText as error detail
     }
     const message = `API Error [${res.status}] at ${endpoint}: ${errorDetail || res.statusText}`;
     console.error(message);
@@ -34,18 +51,18 @@ export const api = {
   async checkHealth(): Promise<{ status: string; hipaa_compliance_engine?: string }> {
     try {
       const res = await fetch('/health');
-      return await handleResponse(res, '/health');
+      if (res.ok) return await res.json();
     } catch {
-      // Direct retry on fallback port 8000 if proxy isn't used
-      const res = await fetch('http://127.0.0.1:8000/health');
-      return await handleResponse(res, 'http://127.0.0.1:8000/health');
+      // try direct
     }
+    const res2 = await fetch('http://127.0.0.1:8000/health');
+    return await handleResponse(res2, 'http://127.0.0.1:8000/health');
   },
 
   // Overview metrics
   async fetchMetrics(): Promise<MetricOverview> {
-    const res = await fetch(`${API_BASE}/metrics`);
-    return handleResponse<MetricOverview>(res, `${API_BASE}/metrics`);
+    const res = await fetchWithFallback('/metrics');
+    return handleResponse<MetricOverview>(res, '/metrics');
   },
 
   // Alerts queue
@@ -59,19 +76,19 @@ export const api = {
     if (params.sort_by) query.append('sort_by', params.sort_by);
     if (params.order) query.append('order', params.order);
 
-    const url = `${API_BASE}/alerts${query.toString() ? `?${query.toString()}` : ''}`;
-    const res = await fetch(url);
-    return handleResponse<Alert[]>(res, url);
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await fetchWithFallback(`/alerts${queryString}`);
+    return handleResponse<Alert[]>(res, `/alerts${queryString}`);
   },
 
   async fetchAlert(alertId: string): Promise<Alert> {
-    const res = await fetch(`${API_BASE}/alerts/${encodeURIComponent(alertId)}`);
-    return handleResponse<Alert>(res, `${API_BASE}/alerts/${alertId}`);
+    const res = await fetchWithFallback(`/alerts/${encodeURIComponent(alertId)}`);
+    return handleResponse<Alert>(res, `/alerts/${alertId}`);
   },
 
   async updateAlertStatus(alertId: string, newStatus: AlertStatus): Promise<Alert> {
-    const url = `${API_BASE}/alerts/${encodeURIComponent(alertId)}/status?new_status=${encodeURIComponent(newStatus)}`;
-    const res = await fetch(url, {
+    const url = `/alerts/${encodeURIComponent(alertId)}/status?new_status=${encodeURIComponent(newStatus)}`;
+    const res = await fetchWithFallback(url, {
       method: 'PATCH',
     });
     return handleResponse<Alert>(res, url);
@@ -84,14 +101,14 @@ export const api = {
     if (params.status) query.append('status', params.status);
     if (params.search) query.append('search', params.search);
 
-    const url = `${API_BASE}/incidents${query.toString() ? `?${query.toString()}` : ''}`;
-    const res = await fetch(url);
-    return handleResponse<Incident[]>(res, url);
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await fetchWithFallback(`/incidents${queryString}`);
+    return handleResponse<Incident[]>(res, `/incidents${queryString}`);
   },
 
   async fetchIncident(incidentId: string): Promise<Incident> {
-    const res = await fetch(`${API_BASE}/incidents/${encodeURIComponent(incidentId)}`);
-    return handleResponse<Incident>(res, `${API_BASE}/incidents/${incidentId}`);
+    const res = await fetchWithFallback(`/incidents/${encodeURIComponent(incidentId)}`);
+    return handleResponse<Incident>(res, `/incidents/${incidentId}`);
   },
 
   // Chronological Evidence Timeline
@@ -99,22 +116,21 @@ export const api = {
     const query = new URLSearchParams();
     if (evidenceType) query.append('evidence_type', evidenceType);
 
-    const url = `${API_BASE}/incidents/${encodeURIComponent(incidentId)}/timeline${query.toString() ? `?${query.toString()}` : ''}`;
-    const res = await fetch(url);
-    return handleResponse<TimelineEvent[]>(res, url);
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await fetchWithFallback(`/incidents/${encodeURIComponent(incidentId)}/timeline${queryString}`);
+    return handleResponse<TimelineEvent[]>(res, `/incidents/${incidentId}/timeline`);
   },
 
   // Investigation Status Controls
   async updateInvestigationStatus(incidentId: string, payload: StatusUpdateRequest): Promise<Incident> {
-    const url = `${API_BASE}/incidents/${encodeURIComponent(incidentId)}/status`;
-    const res = await fetch(url, {
+    const res = await fetchWithFallback(`/incidents/${encodeURIComponent(incidentId)}/status`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
     });
-    return handleResponse<Incident>(res, url);
+    return handleResponse<Incident>(res, `/incidents/${incidentId}/status`);
   },
 
   // Forensic File Upload with SHA-256 calculation & timeline linking
@@ -130,11 +146,10 @@ export const api = {
     if (tags) formData.append('tags', tags);
     if (evidenceType) formData.append('evidence_type', evidenceType);
 
-    const url = `${API_BASE}/evidence/upload`;
-    const res = await fetch(url, {
+    const res = await fetchWithFallback('/evidence/upload', {
       method: 'POST',
       body: formData,
     });
-    return handleResponse<FileUploadResponse>(res, url);
+    return handleResponse<FileUploadResponse>(res, '/evidence/upload');
   },
 };
